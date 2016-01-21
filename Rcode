@@ -1,0 +1,133 @@
+source("http://bioconductor.org/biocLite.R")
+biocLite()
+biocLite("GEOquery")
+library(GEOquery)
+library(pls)
+library(stats4)
+library(splines)
+library(VGAM)
+library(wSVM)
+library(wSVM)
+library(MASS)
+library(quadprog)
+####installed and loaded the required libraries 
+gds4824 <- getGEO(filename='C:/Users/yashas/Downloads/GDS4824.soft.gz')
+######downloaded the data set and set the path,use / in path
+
+eset = GDS2eSet(gds4824)
+pdata = pData(eset)
+xprs = exprs(eset)
+cancerdata = t(xprs)
+category = as.numeric(pdata$disease.state)-1
+cat1 = which(category == 1)
+cat0 = which(category == 0)
+####selected the data set for t test
+
+tlist = apply(cancerdata, 2, function(a){t.test(a[cat0], a[cat1])$p.value})
+
+#performed the t test and find the p values
+
+
+cancerdata2<-cbind(gds4824@dataTable@table)
+
+gene.pval = data.frame(colnames(cancerdata), tlist)
+sortedgene<-gene.pval[order(gene.pval[,2]),]
+topgenesindex<-which(sortedgene[,2]<.05)
+
+#sorted the data based on p values and filter to select only those which have less than .05
+
+topgenes<-sortedgene[topgenesindex,]
+topcancergenes<-cancerdata2[topgenes$colnames.cancerdata.,]
+uniquegenes1<-topcancergenes[!duplicated(topcancergenes$IDENTIFIER), ]
+uniquegenes<-uniquegenes1[1:400,]
+##obtained too many 10000 features so select only top 400 and removed the duplicates.
+
+uniquegenes<-as.data.frame(t(uniquegenes))
+cancerheader<-cbind(gds4824@dataTable@columns)
+uniquegenes<-uniquegenes[-1,]
+
+for(i in 1:ncol(uniquegenes)) 
+colnames(uniquegenes)[i] <- toString(uniquegenes[1,i])
+
+uniquegenes<-uniquegenes[-1,]
+uniquegenes<-cbind(cancerheader,uniquegenes)
+uniquegenes$disease.state<-as.numeric(uniquegenes$disease.state)-1
+
+uniquegenes<-uniquegenes[,-1]
+uniquegenes<-uniquegenes[,-2:-3]
+#filtered the data so that features are columns and rows are observations
+
+u = data.frame(NULL)
+for(i in 1:nrow(uniquegenes)) {
+  for (j in 1:ncol(uniquegenes)) {
+    u[i,j] = as.numeric(as.character(uniquegenes[i,j]))
+  }
+}
+
+#reformatted data as data.frame was storing individual elements as factors creating errors in elements
+
+set.seed(1000)
+train <- sample(1:nrow(u), .7*nrow(u))
+uniquegenes_train <- as.data.frame(u[train,])
+uniquegenes_test <- as.data.frame(u[-train,])
+###divide the data into train and test
+
+pcr.fit = pcr(V1 ~. , data = uniquegenes_train)
+pcr.pred = predict(pcr.fit, uniquegenes_test[,-1], ncomp=13)
+####pcr model predicts with good accuracy for test data
+
+pls.fit = plsr(V1 ~., data = uniquegenes_train, validation = "none")
+pls.pred= predict(pls.fit, uniquegenes_test[,-1],ncomp=13)
+
+####pls model predicts with good accuracy for test data
+
+
+
+elasticnet.mod = glmnet(data.matrix(uniquegenes_train[,-1]),unlist(uniquegenes_train[,1]), alpha=.5)
+cv.out <- cv.glmnet(data.matrix(uniquegenes_train[,-1]),unlist(uniquegenes_train[,1]))
+elastic.pred.test <- (predict(cv.out,data.matrix(uniquegenes_test[,-1]) , s="lambda.1se"))
+
+####predicts with good accuracy for test data
+
+
+pls.error<-Error.rate(round(pls.pred),uniquegenes_test$V1)
+pcr.error<-Error.rate(round(pcr.pred),uniquegenes_test$V1)
+Elastic.nets.error<-Error.rate(round(elastic.pred.test),uniquegenes_test$V1)
+testerror<-c(pls.error,pcr.error,Elastic.nets.error)
+errornames<-c("pls_error","pcr_error","Elastic_nets_error")
+
+
+errorplot<-as.data.frame(errornames)
+
+ggplot(data=errorplot,aes(x=errornames,y=testerror,group=testerror))+geom_point(size=4.0,color="Red")
+
+#####test error plot code
+
+
+pcr.fit = pcr(V1 ~. , data = uniquegenes_train)
+pcr.pred = predict(pcr.fit, uniquegenes_train[,-1], ncomp=13)
+####pcr model predicts with good accuracy for train data
+
+pls.fit = plsr(V1 ~., data = uniquegenes_train, validation = "none")
+pls.pred= predict(pls.fit, uniquegenes_train[,-1],ncomp=13)
+
+####pls model predicts with good accuracy for train data
+
+
+
+elasticnet.mod = glmnet(data.matrix(uniquegenes_train[,-1]),unlist(uniquegenes_train[,1]), alpha=.5)
+cv.out <- cv.glmnet(data.matrix(uniquegenes_train[,-1]),unlist(uniquegenes_train[,1]))
+elastic.pred.train<- (predict(cv.out,data.matrix(uniquegenes_train[,-1]) , s="lambda.1se"))
+###elastic net for train data
+
+
+pls.error<-Error.rate(round(pls.pred),uniquegenes_train$V1)
+pcr.error<-Error.rate(round(pcr.pred),uniquegenes_train$V1)
+Elastic.nets.error<-Error.rate(round(elastic.pred.train),uniquegenes_train$V1)
+trainerror<-c(pls.error,pcr.error,Elastic.nets.error)
+errornames<-c("pls_error","pcr_error","Elastic_nets_error")
+
+
+errorplot<-as.data.frame(errornames)
+
+ggplot(data=errorplot,aes(x=errornames,y=trainerror,group=trainerror))+geom_point(size=4.0,color="Red")
